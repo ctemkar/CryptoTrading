@@ -1,0 +1,9 @@
+Flask==2.3.3
+requests==2.31.0
+pandas==2.0.3
+numpy==1.24.3
+python-dotenv==1.0.0
+ccxt==4.1.52
+openai==0.28.1
+schedule==1.2.0
+plotly==5.17.0
