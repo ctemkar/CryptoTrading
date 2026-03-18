@@ -1,0 +1,40 @@
+body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; background-color: #eef2f7; color: #333; line-height: 1.6; }
+.container { max-width: 1200px; margin: auto; background-color: #ffffff; padding: 30px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+h1 { color: #2c3e50; text-align: center; margin-bottom: 30px; }
+h2, h3 { color: #5a6f80; border-bottom: 2px solid #e0e0e0; padding-bottom: 5px; margin-bottom: 20px; }
+button { background-color: #3498db; color: white; padding: 12px 20px; border: none; border-radius: 5px; cursor: pointer; margin-right: 10px; margin-bottom: 10px; transition: background-color 0.3s ease; }
+button:hover { background-color: #2980b9; }
+#stopTradingBtn { background-color: #e74c3c; }
+#stopTradingBtn:hover { background-color: #c0392b; }
+#triggerLlmGenBtn, #configureTradingBtn, #resetConfigBtn { background-color: #f39c12; }
+#triggerLlmGenBtn:hover, #configureTradingBtn:hover, #resetConfigBtn:hover { background-color: #d35400; }
+#fetchLlmStrategiesBtn { background-color: #1abc9c; }
+#fetchLlmStrategiesBtn:hover { background-color: #16a085; }
+
+.section { margin-bottom: 30px; padding: 20px; background-color: #f9f9f9; border-radius: 10px; }
+.param-config { margin-top: 15px; }
+.param-config label { display: inline-block; width: 120px; margin-bottom: 8px; font-weight: bold; color: #444; }
+.param-config input[type="number"] { padding: 8px; border: 1px solid #ccc; border-radius: 4px; width: 100px; margin-right: 10px; }
+
+#llmStrategiesContainer div, #marketPricesContainer div { margin-bottom: 15px; padding: 10px; border: 1px solid #eee; border-radius: 5px; background-color: #fff; }
+#llmStrategiesContainer h4, #marketPricesContainer h4 { margin-top: 0; margin-bottom: 5px; color: #34495e; }
+
+.chart-container { width: 100%; max-width: 600px; margin-top: 20px; }
+canvas { border: 1px solid #ccc; border-radius: 5px; background-color: #fff; }
+
+pre { 
+    background-color: #ecf0f1; 
+    padding: 15px; 
+    border-radius: 5px; 
+    overflow-x: auto; 
+    white-space: pre-wrap; /* Wrap long lines */
+    word-wrap: break-word; /* Break words if necessary */
+    max-height: 300px; 
+    font-size: 0.9em;
+    border: 1px solid #bdc3c7;
+}
+pre span { color: #95a5a6; font-style: italic; }
+.status-running { color: #27ae60; font-weight: bold; }
+.status-stopped { color: #c0392b; font-weight: bold; }
+.status-error { color: #e67e22; font-weight: bold; }
+.status-unknown { color: #7f8c8d; }

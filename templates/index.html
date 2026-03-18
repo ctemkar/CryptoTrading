@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crypto Trading Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Crypto Trading Dashboard</h1>
+        
+        <div class="trading-control-section section">
+            <h2>Trading Control & Configuration</h2>
+            <button id="startTradingBtn">Start Trading Script</button>
+            <button id="stopTradingBtn">Stop Trading Script</button>
+            <button id="triggerLlmGenBtn">Generate LLM Strategies</button>
+            <button id="configureTradingBtn">Save Trading Config</button>
+            <button id="resetConfigBtn">Reset Config to Defaults</button>
+            <p>Trading Script Status: <span id="tradingStatus">Unknown</span></p>
+            <p>LLM Generator Status: <span id="llmStatus">Unknown</span></p>
+            
+            <div class="param-config">
+                <h3>Trading Parameters</h3>
+                <label for="configCapital">Capital ($):</label><input type="number" id="configCapital" step="0.01"><br>
+                <label for="configTradeSize">Trade Size ($):</label><input type="number" id="configTradeSize" step="0.01"><br>
+                <label for="configStopLoss">Stop Loss (%):</label><input type="number" id="configStopLoss" step="0.001"><br>
+                <label for="configTakeProfit">Take Profit (%):</label><input type="number" id="configTakeProfit" step="0.001"><br>
+            </div>
+        </div>
+
+        <div class="llm-strategies-section section">
+            <h2>LLM Strategy Suggestions</h2>
+            <button id="fetchLlmStrategiesBtn">Refresh LLM Strategies</button>
+            <div id="llmStrategiesContainer">Loading LLM strategies...</div>
+        </div>
+
+        <div class="market-data-section section">
+            <h2>Market Data</h2>
+            <div id="marketPricesContainer">Loading market prices...</div>
+            <div class="chart-container">
+                <h3>BTC/USD Chart</h3>
+                <canvas id="btcChart"></canvas>
+            </div>
+             <div class="chart-container">
+                <h3>ETH/USD Chart</h3>
+                <canvas id="ethChart"></canvas>
+            </div>
+              <div class="chart-container">
+                <h3>SOL/USD Chart</h3>
+                <canvas id="solChart"></canvas>
+            </div>
+        </div>
+
+        <div class="logs-section section">
+            <h2>Logs & Status</h2>
+            <h3>Trading Script Logs: ([<span id="tradingLogsTimestamp">-</span>])</h3>
+            <pre id="tradingLogs">Loading trading logs...</pre>
+            <h3>LLM Generation Logs:</h3>
+            <pre id="llmLogs">Loading LLM generation logs...</pre>
+            <h3>Status Updates:</h3>
+            <pre id="statusUpdates">Loading status updates...</pre>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="/static/script.js"></script>
+</body>
+</html>
