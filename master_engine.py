@@ -352,35 +352,46 @@ def check_margin_available(symbol: str, side: str, qty: float, price: float) -> 
     Pre-check if we have enough margin/balance to execute the trade.
     Prevents 'insufficient funds' errors from Gemini.
 
+    Gemini requires the FULL notional value for both buys AND shorts,
+    plus fees. We add a 20% safety buffer on top to account for:
+    - Exchange fees (~0.35% maker/taker on Gemini)
+    - Price slippage between check and execution
+    - Any dynamic margin adjustments by the exchange
+    - Rounding differences
+
     Returns: (ok: bool, available_balance: float)
     """
     try:
         init_exchange()
         balance = _exchange_balance()
-        required = qty * price
+        notional = qty * price
 
-        # Gemini margin requirements:
-        # - Buys require the full notional value in USD
-        # - Sells/shorts require collateral (conservatively ~60% to account for
-        #   Gemini's dynamic margin requirements + buffer for fees)
-        if side == "sell":
-            margin_required = required * 0.60
-        else:
-            margin_required = required
+        # Gemini requires full notional value for BOTH buys and shorts.
+        # Add 20% safety buffer to cover fees, slippage, and exchange overhead.
+        SAFETY_BUFFER = 1.20
+        margin_required = notional * SAFETY_BUFFER
 
         total_needed = margin_required + MIN_BALANCE_RESERVE
 
+        logger.info(
+            f"📊 [MARGIN CHECK] {SYMBOL_MAP.get(symbol, symbol)} {side.upper()}: "
+            f"notional=${notional:.2f}, margin_required=${margin_required:.2f} "
+            f"(notional×{SAFETY_BUFFER}), reserve=${MIN_BALANCE_RESERVE:.2f}, "
+            f"total_needed=${total_needed:.2f}, balance=${balance:.2f}"
+        )
+
         if balance < total_needed:
             logger.warning(
-                f"⚠️  [MARGIN CHECK] {SYMBOL_MAP.get(symbol, symbol)}: "
-                f"Need ${margin_required:.2f} margin + ${MIN_BALANCE_RESERVE:.2f} reserve "
-                f"= ${total_needed:.2f}, but only ${balance:.2f} available"
+                f"⚠️  [MARGIN CHECK FAILED] {SYMBOL_MAP.get(symbol, symbol)}: "
+                f"Need ${total_needed:.2f} (${margin_required:.2f} margin + "
+                f"${MIN_BALANCE_RESERVE:.2f} reserve) but only ${balance:.2f} available"
             )
             return False, balance
 
         logger.info(
-            f"✅ [MARGIN CHECK] {SYMBOL_MAP.get(symbol, symbol)}: "
-            f"${margin_required:.2f} required, ${balance:.2f} available"
+            f"✅ [MARGIN CHECK PASSED] {SYMBOL_MAP.get(symbol, symbol)}: "
+            f"${margin_required:.2f} required, ${balance:.2f} available "
+            f"(${balance - total_needed:.2f} headroom)"
         )
         return True, balance
     except Exception as e:
@@ -392,13 +403,25 @@ def calculate_safe_trade_size(balance: float) -> float:
     """
     Dynamically scale trade size based on available balance.
     Prevents over-leveraging when balance is low.
+
+    Uses 15% of usable balance to leave room for multiple concurrent
+    positions across the 6 monitored pairs, plus the 20% safety buffer
+    applied during margin checks.
     """
     usable = balance - MIN_BALANCE_RESERVE
     if usable <= 0:
+        logger.info(f"📊 [TRADE SIZE] balance=${balance:.2f}, usable=$0.00 — skipping")
         return 0.0
-    # Never risk more than 25% of usable balance per trade, capped at TRADE_SIZE_USD
-    max_trade = min(usable * 0.25, TRADE_SIZE_USD)
-    return max(max_trade, 5.0) if max_trade >= 5.0 else 0.0  # Gemini min ~$5
+    # Use 15% of usable balance per trade (down from 25%) to stay well
+    # within Gemini's margin requirements even after the 1.20× safety buffer.
+    max_trade = min(usable * 0.15, TRADE_SIZE_USD)
+    result = max(max_trade, 5.0) if max_trade >= 5.0 else 0.0  # Gemini min ~$5
+    logger.info(
+        f"📊 [TRADE SIZE] balance=${balance:.2f}, usable=${usable:.2f}, "
+        f"15% of usable=${usable * 0.15:.2f}, capped=${max_trade:.2f}, "
+        f"final=${result:.2f}"
+    )
+    return result
 
 
 def get_min_order_size(symbol: str) -> float:
