@@ -452,13 +452,28 @@ def calculate_order_qty(symbol: str, price: float, usd_amount: float) -> float:
     return qty
 
 
-def place_order(symbol: str, side: str, qty: float, price: float, retry: int = 1) -> dict:
+def place_order(symbol: str, side: str, qty: float, price: float,
+                retry: int = 1, use_margin: bool = False) -> dict:
     """
     Place a limit order on Gemini with comprehensive error handling.
     Includes margin pre-check and optional retry with reduced size.
+
+    Key fix: Gemini uses different order type prefixes for spot vs margin:
+      - "exchange limit" → SPOT order (must own asset to sell)
+      - "limit"          → MARGIN order (can short with borrowed funds)
+
+    For SHORT orders (selling crypto you don't own), we MUST use margin type.
+    For BUY orders (spending USD), spot type works fine.
+
+    Args:
+        use_margin: If True, use margin order type ("limit") instead of
+                    spot ("exchange limit"). Required for SHORT positions
+                    and for closing SHORT positions (buying back borrowed asset).
+
     Returns order dict or None on failure.
     """
     tag = SYMBOL_MAP[symbol]
+    order_type_label = "MARGIN" if use_margin else "SPOT"
     try:
         init_exchange()
 
@@ -473,31 +488,45 @@ def place_order(symbol: str, side: str, qty: float, price: float, retry: int = 1
             )
             return None
 
-        logger.info(f"🚀 Placing {side.upper()} order: {tag} | qty: {qty} @ {price}")
+        # Determine order type: margin orders use "limit", spot uses default "exchange limit"
+        order_params = {}
+        if use_margin:
+            order_params["type"] = "limit"
+
+        logger.info(
+            f"🚀 Placing {side.upper()} [{order_type_label}] order: "
+            f"{tag} | qty: {qty} @ {price}"
+        )
 
         order = exchange.create_order(
             symbol=symbol,
-            type="exchange limit",
+            type="limit",
             side=side,
             amount=qty,
             price=price,
+            params=order_params,
         )
 
-        logger.info(f"✅ Order placed: {tag} {side.upper()} {qty} @ ${price:,.2f}")
+        logger.info(
+            f"✅ Order placed [{order_type_label}]: "
+            f"{tag} {side.upper()} {qty} @ ${price:,.2f}"
+        )
         sb_log_trade(tag, side, qty, price, "open")
         return order
 
     except ccxt.InsufficientFunds as e:
         logger.error(
-            f"❌ [EXECUTION ERROR] {tag}: Gemini rejected {side} order – "
-            f"insufficient funds (qty={qty}, price=${price:,.2f})"
+            f"❌ [EXECUTION ERROR] {tag}: Gemini rejected {side} [{order_type_label}] "
+            f"order – insufficient funds (qty={qty}, price=${price:,.2f}). "
+            f"Error: {e}"
         )
         # Retry with a smaller quantity if we haven't already
         if retry > 0:
             reduced_qty = calculate_order_qty(symbol, price, calculate_safe_trade_size(_exchange_balance()))
             if reduced_qty > 0 and reduced_qty < qty:
                 logger.info(f"🔄 [RETRY] Attempting reduced order: {reduced_qty} (was {qty})")
-                return place_order(symbol, side, reduced_qty, price, retry=retry - 1)
+                return place_order(symbol, side, reduced_qty, price,
+                                   retry=retry - 1, use_margin=use_margin)
         return None
     except ccxt.InvalidOrder as e:
         logger.error(f"❌ [EXECUTION ERROR] {tag}: Invalid order – {e}")
@@ -508,7 +537,8 @@ def place_order(symbol: str, side: str, qty: float, price: float, retry: int = 1
         if retry > 0:
             logger.info(f"🔄 [RETRY] Retrying after network error...")
             time.sleep(2)
-            return place_order(symbol, side, qty, price, retry=retry - 1)
+            return place_order(symbol, side, qty, price,
+                               retry=retry - 1, use_margin=use_margin)
         return None
     except ccxt.ExchangeError as e:
         logger.error(f"❌ [EXCHANGE ERROR] {tag}: {e}")
@@ -524,7 +554,12 @@ def place_order(symbol: str, side: str, qty: float, price: float, retry: int = 1
 # ---------------------------------------------------------------------------
 
 def close_position(position: dict, current_price: float):
-    """Close an existing position."""
+    """Close an existing position.
+
+    Uses margin order type when closing a SHORT position (buying back
+    borrowed asset), and spot order type when closing a LONG position
+    (selling owned asset).
+    """
     symbol_tag = position["symbol"]
     # Convert tag back to ccxt symbol
     symbol = None
@@ -543,22 +578,36 @@ def close_position(position: dict, current_price: float):
     # Close = opposite side
     close_side = "sell" if side == "buy" else "buy"
 
-    logger.info(f"🔴 CLOSED {side.upper()} {symbol_tag} successfully.")
+    # If original position was a SHORT (side="sell"), closing it requires
+    # a margin BUY to return the borrowed asset. Use margin order type.
+    # If original position was a BUY (side="buy"), closing is a spot SELL.
+    is_short_position = (side == "sell")
 
-    order = place_order(symbol, close_side, qty, current_price)
+    logger.info(
+        f"🔴 Closing {side.upper()} {symbol_tag} "
+        f"({'MARGIN' if is_short_position else 'SPOT'} close)..."
+    )
+
+    order = place_order(symbol, close_side, qty, current_price,
+                        use_margin=is_short_position)
 
     if order:
         pnl = (current_price - entry) * qty if side == "buy" else (entry - current_price) * qty
         sb_close_position(position.get("id"), current_price, pnl)
         sb_log_trade(symbol_tag, close_side, qty, current_price, "close", pnl)
+        logger.info(f"🔴 CLOSED {side.upper()} {symbol_tag} successfully.")
         logger.info(f"💰 PnL: ${pnl:+.2f}")
     else:
         logger.warning(f"⚠️  Failed to close {symbol_tag} position on exchange")
 
 
 def open_new_position(symbol: str, side: str, price: float):
-    """Open a new position with dynamic sizing and margin checks."""
+    """Open a new position with dynamic sizing and margin checks.
+
+    Uses margin order type for SHORT (sell) positions, spot for BUY positions.
+    """
     tag = SYMBOL_MAP[symbol]
+    is_short = (side == "sell")
 
     # Dynamically size the trade based on available balance
     balance = _exchange_balance()
@@ -576,11 +625,11 @@ def open_new_position(symbol: str, side: str, price: float):
         return
 
     logger.info(
-        f"🚀 OPENING {side.upper()} on {tag} | qty: {qty} @ {price} "
-        f"(trade size: ${trade_usd:.2f})"
+        f"🚀 OPENING {side.upper()} {'[MARGIN]' if is_short else '[SPOT]'} "
+        f"on {tag} | qty: {qty} @ {price} (trade size: ${trade_usd:.2f})"
     )
 
-    order = place_order(symbol, side, qty, price)
+    order = place_order(symbol, side, qty, price, use_margin=is_short)
     if order:
         sb_open_position(tag, side, qty, price)
 
