@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Crypto Master Consensus Engine v2.1
+Crypto Master Consensus Engine v2.2
 ====================================
 Automated cryptocurrency trading engine that:
 - Performs SMA20/SMA50 technical analysis on crypto pairs
@@ -9,7 +9,8 @@ Automated cryptocurrency trading engine that:
 - Uses Supabase as the single source of truth for state management
 - Runs every 15 minutes via scheduler
 
-Supported pairs: BTCUSD, ETHUSD, SOLUSD, LTCUSD, XRPUSD, DOGEUSD
+Supported pairs: BTC, ETH, SOL, LTC, XRP, DOGE, LINK, AVAX, AAVE,
+                 UNI, SHIB, PEPE, DOT, ATOM, FIL
 """
 
 import os
@@ -27,29 +28,71 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
+# ╔═══════════════════════════════════════════════════════════════════════════╗
+# ║                     CONFIGURATION — EDIT HERE                            ║
+# ║  All tuneable settings are in this section. Adjust freely.               ║
+# ╚═══════════════════════════════════════════════════════════════════════════╝
+
+# ---- API Credentials (loaded from .env) ------------------------------------
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_API_SECRET = os.getenv("GEMINI_API_SECRET", "")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 
-SYMBOLS = ["BTC/USD", "ETH/USD", "SOL/USD", "LTC/USD", "XRP/USD", "DOGE/USD"]
+# ---- Trading Pairs ---------------------------------------------------------
+# All Gemini-supported USD pairs. The engine will analyze and trade each one.
+# Margin SHORT is only available on BTC, ETH, SOL, XRP (Gemini limitation).
+# All other pairs can still be traded LONG (spot buy) and closed (spot sell).
+SYMBOLS = [
+    # --- Major caps (margin-eligible for shorts) ---
+    "BTC/USD",      # Bitcoin
+    "ETH/USD",      # Ethereum
+    "SOL/USD",      # Solana
+    "XRP/USD",      # Ripple
+    # --- Large caps (spot only) ---
+    "LTC/USD",      # Litecoin
+    "DOGE/USD",     # Dogecoin
+    "LINK/USD",     # Chainlink
+    "AVAX/USD",     # Avalanche
+    "DOT/USD",      # Polkadot
+    "ATOM/USD",     # Cosmos
+    # --- DeFi / Mid-caps (spot only) ---
+    "AAVE/USD",     # Aave
+    "UNI/USD",      # Uniswap
+    "FIL/USD",      # Filecoin
+    # --- Meme / Small-caps (spot only, high-volume) ---
+    "SHIB/USD",     # Shiba Inu
+    "PEPE/USD",     # Pepe
+]
+
 SYMBOL_MAP = {s: s.replace("/", "") for s in SYMBOLS}  # BTC/USD -> BTCUSD
 
-SMA_SHORT = 20
-SMA_LONG = 50
-CANDLE_TIMEFRAME = "1h"
-CANDLE_LIMIT = 60  # enough for SMA50
+# Symbols eligible for margin SHORT orders on Gemini (up to 5x leverage).
+# Other symbols will only open LONG (buy) positions and ignore SHORT signals.
+MARGIN_ELIGIBLE = {"BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD"}
 
-TRADE_SIZE_USD = 50.0          # USD per trade
-MIN_BALANCE_RESERVE = 20.0     # keep minimum reserve
-CYCLE_INTERVAL_MINUTES = 15
+# ---- Technical Analysis Settings -------------------------------------------
+SMA_SHORT = 20             # Fast moving average period (candles)
+SMA_LONG = 50              # Slow moving average period (candles)
+CANDLE_TIMEFRAME = "1h"    # OHLCV candle interval
+CANDLE_LIMIT = 60          # Number of candles to fetch (must be >= SMA_LONG)
 
-# Sentiment thresholds
-BEARISH_THRESHOLD = 65   # confidence % to trigger bearish signal
-BULLISH_THRESHOLD = 65   # confidence % to trigger bullish signal
+# ---- Sentiment / Confidence Thresholds -------------------------------------
+# Lower  = more aggressive (trades more often, but more false signals)
+# Higher = more conservative (fewer trades, higher conviction required)
+# Range: 50 (trade on anything) to 90 (extremely selective)
+# Previous default was 65 — lowered to 58 so the engine actually trades
+# when prices are near the SMAs (common in sideways/consolidating markets).
+BEARISH_THRESHOLD = int(os.getenv("BEARISH_THRESHOLD", "58"))
+BULLISH_THRESHOLD = int(os.getenv("BULLISH_THRESHOLD", "58"))
+
+# ---- Position Sizing -------------------------------------------------------
+TRADE_SIZE_USD = float(os.getenv("TRADE_SIZE_USD", "50.0"))   # Max USD per trade
+MIN_BALANCE_RESERVE = 20.0     # Always keep at least this much USD in account
+TRADE_SIZE_PCT = 0.15           # Use 15% of usable balance per trade (capped by TRADE_SIZE_USD)
+
+# ---- Cycle Timing ----------------------------------------------------------
+CYCLE_INTERVAL_MINUTES = int(os.getenv("CYCLE_INTERVAL_MINUTES", "15"))  # Minutes between analysis runs
 
 # ---------------------------------------------------------------------------
 # Logging  (logs are stored in-memory for dashboard consumption)
@@ -101,12 +144,21 @@ def init_exchange():
 
 
 def init_supabase():
-    """Initialize Supabase client."""
+    """Initialize Supabase client.
+
+    Supabase is OPTIONAL — the engine works fine without it for testing.
+    Without Supabase: positions are not persisted across restarts,
+    but all trading and analysis still works normally.
+    """
     global supabase
     if supabase is not None:
         return
     if not SUPABASE_URL or not SUPABASE_KEY:
-        logger.warning("⚠️  Supabase credentials not set – running in local-only mode")
+        logger.info(
+            "ℹ️  Supabase not configured — running in local-only mode. "
+            "This is fine for testing. Set SUPABASE_URL and SUPABASE_KEY "
+            "in .env to enable persistent state (positions, trades, equity)."
+        )
         return
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     logger.info("✅ Supabase client initialized")
@@ -412,9 +464,8 @@ def calculate_safe_trade_size(balance: float) -> float:
     if usable <= 0:
         logger.info(f"📊 [TRADE SIZE] balance=${balance:.2f}, usable=$0.00 — skipping")
         return 0.0
-    # Use 15% of usable balance per trade (down from 25%) to stay well
-    # within Gemini's margin requirements even after the 1.20× safety buffer.
-    max_trade = min(usable * 0.15, TRADE_SIZE_USD)
+    # Use TRADE_SIZE_PCT of usable balance per trade, capped by TRADE_SIZE_USD.
+    max_trade = min(usable * TRADE_SIZE_PCT, TRADE_SIZE_USD)
     result = max(max_trade, 5.0) if max_trade >= 5.0 else 0.0  # Gemini min ~$5
     logger.info(
         f"📊 [TRADE SIZE] balance=${balance:.2f}, usable=${usable:.2f}, "
@@ -425,16 +476,34 @@ def calculate_safe_trade_size(balance: float) -> float:
 
 
 def get_min_order_size(symbol: str) -> float:
-    """Get minimum order size for a symbol on Gemini."""
+    """Get minimum order size for a symbol on Gemini.
+
+    These values come from Gemini's API docs / market info.
+    When in doubt, use a conservatively small value — Gemini will
+    reject if it's below their minimum and the retry logic will handle it.
+    """
     min_sizes = {
-        "BTC/USD": 0.00001,
-        "ETH/USD": 0.001,
-        "SOL/USD": 0.01,
-        "LTC/USD": 0.01,
-        "XRP/USD": 1.0,
+        # Major caps
+        "BTC/USD":  0.00001,
+        "ETH/USD":  0.001,
+        "SOL/USD":  0.01,
+        "XRP/USD":  1.0,
+        # Large caps
+        "LTC/USD":  0.01,
         "DOGE/USD": 1.0,
+        "LINK/USD": 0.01,
+        "AVAX/USD": 0.01,
+        "DOT/USD":  0.01,
+        "ATOM/USD": 0.01,
+        # DeFi / Mid-caps
+        "AAVE/USD": 0.001,
+        "UNI/USD":  0.01,
+        "FIL/USD":  0.01,
+        # Meme / Small-caps
+        "SHIB/USD": 1000.0,   # SHIB trades in large quantities
+        "PEPE/USD": 10000.0,  # PEPE trades in very large quantities
     }
-    return min_sizes.get(symbol, 0.001)
+    return min_sizes.get(symbol, 0.01)
 
 
 def calculate_order_qty(symbol: str, price: float, usd_amount: float) -> float:
@@ -605,9 +674,15 @@ def open_new_position(symbol: str, side: str, price: float):
     """Open a new position with dynamic sizing and margin checks.
 
     Uses margin order type for SHORT (sell) positions, spot for BUY positions.
+    SHORT orders are only placed for MARGIN_ELIGIBLE symbols; others are skipped.
     """
     tag = SYMBOL_MAP[symbol]
     is_short = (side == "sell")
+
+    # Only margin-eligible symbols can be shorted on Gemini
+    if is_short and symbol not in MARGIN_ELIGIBLE:
+        logger.info(f"⏭️  {tag}: SHORT signal skipped — not margin-eligible (spot only)")
+        return
 
     # Dynamically size the trade based on available balance
     balance = _exchange_balance()
@@ -769,11 +844,19 @@ def run_cycle():
 def start_engine():
     """Start the engine with scheduled cycles."""
     logger.info("=" * 60)
-    logger.info("  MASTER ENGINE v2.1 (DEBUG MODE)")
+    logger.info("  MASTER ENGINE v2.2")
     logger.info("=" * 60)
-    logger.info(f"Symbols: {', '.join(SYMBOL_MAP.values())}")
-    logger.info(f"Cycle interval: {CYCLE_INTERVAL_MINUTES} minutes")
-    logger.info(f"Trade size: ${TRADE_SIZE_USD}")
+    logger.info("")
+    logger.info("📋 CURRENT CONFIGURATION:")
+    logger.info(f"   Symbols ({len(SYMBOLS)}): {', '.join(SYMBOL_MAP.values())}")
+    logger.info(f"   Margin-eligible (shorts): {', '.join(s.replace('/','') for s in MARGIN_ELIGIBLE)}")
+    logger.info(f"   Cycle interval: {CYCLE_INTERVAL_MINUTES} min")
+    logger.info(f"   Trade size: ${TRADE_SIZE_USD} (or {TRADE_SIZE_PCT*100:.0f}% of usable balance)")
+    logger.info(f"   Balance reserve: ${MIN_BALANCE_RESERVE}")
+    logger.info(f"   Bullish threshold: {BULLISH_THRESHOLD}%")
+    logger.info(f"   Bearish threshold: {BEARISH_THRESHOLD}%")
+    logger.info(f"   SMA periods: {SMA_SHORT}/{SMA_LONG} on {CANDLE_TIMEFRAME} candles")
+    logger.info(f"   Supabase: {'configured' if SUPABASE_URL else 'not configured (local-only mode)'}")
     logger.info("")
 
     # Initial cycle
