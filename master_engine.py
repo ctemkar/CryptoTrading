@@ -94,6 +94,17 @@ TRADE_SIZE_PCT = 0.15           # Use 15% of usable balance per trade (capped by
 # ---- Cycle Timing ----------------------------------------------------------
 CYCLE_INTERVAL_MINUTES = int(os.getenv("CYCLE_INTERVAL_MINUTES", "15"))  # Minutes between analysis runs
 
+# ---- Short-selling Mode ----------------------------------------------------
+# "margin"     = Normal mode: open SHORT positions via margin (requires Gemini margin enabled)
+# "close_only" = Safe mode: BEARISH signals close existing LONGs instead of opening SHORTs
+#                Use this if your Gemini account doesn't have margin trading enabled.
+SHORT_MODE = os.getenv("SHORT_MODE", "margin").lower()  # "margin" or "close_only"
+
+# ---- Debug / Verbose Logging ------------------------------------------------
+# Set to True (or VERBOSE_ORDERS=true in .env) to log the EXACT params sent
+# to Gemini API for every order. Useful for diagnosing margin issues.
+VERBOSE_ORDERS = os.getenv("VERBOSE_ORDERS", "false").lower() in ("true", "1", "yes")
+
 # ---------------------------------------------------------------------------
 # Logging  (logs are stored in-memory for dashboard consumption)
 # ---------------------------------------------------------------------------
@@ -575,6 +586,14 @@ def place_order(symbol: str, side: str, qty: float, price: float,
             + (" (margin_order=true)" if use_margin else "")
         )
 
+        # Verbose logging: show exact params being sent to Gemini API
+        if VERBOSE_ORDERS:
+            logger.info(f"🔍 [VERBOSE] create_order params:")
+            logger.info(f"   symbol={symbol}, type='limit', side={side}")
+            logger.info(f"   amount={qty}, price={price}")
+            logger.info(f"   params={order_params}")
+            logger.info(f"   use_margin={use_margin}, SHORT_MODE={SHORT_MODE}")
+
         order = exchange.create_order(
             symbol=symbol,
             type="limit",
@@ -583,6 +602,10 @@ def place_order(symbol: str, side: str, qty: float, price: float,
             price=price,
             params=order_params,
         )
+
+        # Verbose: log the response
+        if VERBOSE_ORDERS:
+            logger.info(f"🔍 [VERBOSE] Gemini response: {order}")
 
         logger.info(
             f"✅ Order placed [{order_type_label}]: "
@@ -597,6 +620,12 @@ def place_order(symbol: str, side: str, qty: float, price: float,
             f"order – insufficient funds (qty={qty}, price=${price:,.2f}). "
             f"Error: {e}"
         )
+        if use_margin:
+            logger.error(
+                f"   💡 This was a MARGIN order (margin_order=True was sent). "
+                f"If this still fails, your Gemini account may not have margin enabled. "
+                f"Run: python check_gemini_account.py  OR  set SHORT_MODE=close_only in .env"
+            )
         # Retry with a smaller quantity if we haven't already
         if retry > 0:
             reduced_qty = calculate_order_qty(symbol, price, calculate_safe_trade_size(_exchange_balance()))
@@ -736,10 +765,21 @@ def determine_action(sentiment: str, confidence: int) -> str:
 def process_signal(symbol: str, analysis: dict, positions: list):
     """
     Decide whether to open/close/flip a position based on the new signal.
+
+    SHORT_MODE behaviour:
+      - "margin" (default): BEARISH → open a SHORT position via margin
+      - "close_only":       BEARISH → close any existing LONG position (no shorts)
+        This is the safe fallback when margin trading isn't available on Gemini.
     """
     tag = analysis["symbol"]
     action = determine_action(analysis["sentiment"], analysis["confidence"])
     price = analysis["price"]
+
+    # ── Close-only mode: convert SHORT signals to CLOSE_LONG ──────────
+    # In close_only mode, we never open SHORT positions.
+    # Instead, a BEARISH signal closes any existing LONG (takes profit / cuts loss).
+    if SHORT_MODE == "close_only" and action == "SHORT":
+        action = "CLOSE_LONG"  # internal-only action
 
     # Find current position for this symbol
     current_pos = None
@@ -750,7 +790,20 @@ def process_signal(symbol: str, analysis: dict, positions: list):
 
     current_side = current_pos["side"] if current_pos else None
 
-    logger.info(f"[{tag}] {analysis['sentiment']} ({analysis['confidence']}%) -> {action}")
+    logger.info(f"[{tag}] {analysis['sentiment']} ({analysis['confidence']}%) -> {action}"
+                + (f" (SHORT_MODE={SHORT_MODE})" if SHORT_MODE != "margin" else ""))
+
+    # ── CLOSE_LONG: close-only mode bearish action ────────────────────
+    if action == "CLOSE_LONG":
+        if current_pos and current_side == "buy":
+            logger.info(f"📉 BEARISH signal in close-only mode → closing LONG {tag}")
+            close_position(current_pos, price)
+        else:
+            if current_pos is None:
+                logger.info(f"⏭️  {tag}: BEARISH signal but no position open (close-only mode, skipping)")
+            else:
+                logger.info(f"⏭️  {tag}: BEARISH signal but position is already SHORT (close-only mode, skipping)")
+        return
 
     # No position and HOLD -> do nothing
     if current_pos is None and action == "HOLD":
@@ -858,6 +911,9 @@ def start_engine():
     logger.info("📋 CURRENT CONFIGURATION:")
     logger.info(f"   Symbols ({len(SYMBOLS)}): {', '.join(SYMBOL_MAP.values())}")
     logger.info(f"   Margin-eligible (shorts): {', '.join(s.replace('/','') for s in MARGIN_ELIGIBLE)}")
+    logger.info(f"   SHORT mode: {SHORT_MODE.upper()}"
+                + (" (BEARISH → close LONG only, no shorts)" if SHORT_MODE == "close_only" else " (BEARISH → open SHORT via margin)"))
+    logger.info(f"   Verbose orders: {'ON' if VERBOSE_ORDERS else 'OFF'} (set VERBOSE_ORDERS=true in .env to debug)")
     logger.info(f"   Cycle interval: {CYCLE_INTERVAL_MINUTES} min")
     logger.info(f"   Trade size: ${TRADE_SIZE_USD} (or {TRADE_SIZE_PCT*100:.0f}% of usable balance)")
     logger.info(f"   Balance reserve: ${MIN_BALANCE_RESERVE}")
