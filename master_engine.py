@@ -127,7 +127,12 @@ supabase: Client = None       # type: ignore
 
 
 def init_exchange():
-    """Initialize Gemini exchange via ccxt with margin support."""
+    """Initialize Gemini exchange via ccxt.
+
+    Note: Gemini margin is NOT controlled by ccxt 'defaultType'.
+    Instead, individual orders opt into margin via the 'margin_order'
+    parameter in the Gemini REST API (passed through ccxt params).
+    """
     global exchange
     if exchange is not None:
         return
@@ -135,12 +140,9 @@ def init_exchange():
         "apiKey": GEMINI_API_KEY,
         "secret": GEMINI_API_SECRET,
         "enableRateLimit": True,
-        "options": {
-            "defaultType": "margin",  # use margin account
-        },
     })
     exchange.set_sandbox_mode(False)
-    logger.info("✅ Gemini exchange initialized (margin mode)")
+    logger.info("✅ Gemini exchange initialized")
 
 
 def init_supabase():
@@ -527,17 +529,21 @@ def place_order(symbol: str, side: str, qty: float, price: float,
     Place a limit order on Gemini with comprehensive error handling.
     Includes margin pre-check and optional retry with reduced size.
 
-    Key fix: Gemini uses different order type prefixes for spot vs margin:
-      - "exchange limit" → SPOT order (must own asset to sell)
-      - "limit"          → MARGIN order (can short with borrowed funds)
+    Gemini margin mechanism (confirmed from docs.gemini.com/rest/orders):
+      - ALL orders default to spot ("exchange limit" in ccxt).
+      - To short-sell (sell crypto you don't own), you MUST pass
+        margin_order=True in the Gemini API payload.
+      - ccxt passes extra params directly to Gemini, so we use
+        params={'margin_order': True} for margin orders.
 
-    For SHORT orders (selling crypto you don't own), we MUST use margin type.
-    For BUY orders (spending USD), spot type works fine.
+    IMPORTANT: passing params={'type': 'limit'} does NOT work because
+    ccxt's gemini.create_order() extracts and strips 'type' from params
+    before sending to the API. The correct param is 'margin_order'.
 
     Args:
-        use_margin: If True, use margin order type ("limit") instead of
-                    spot ("exchange limit"). Required for SHORT positions
-                    and for closing SHORT positions (buying back borrowed asset).
+        use_margin: If True, add margin_order=True to the Gemini API
+                    request. Required for SHORT positions and for
+                    closing SHORT positions (buying back borrowed asset).
 
     Returns order dict or None on failure.
     """
@@ -557,14 +563,16 @@ def place_order(symbol: str, side: str, qty: float, price: float,
             )
             return None
 
-        # Determine order type: margin orders use "limit", spot uses default "exchange limit"
+        # For margin orders (shorts & closing shorts), tell Gemini API
+        # to treat this as a margin order so it can borrow the asset.
         order_params = {}
         if use_margin:
-            order_params["type"] = "limit"
+            order_params["margin_order"] = True
 
         logger.info(
             f"🚀 Placing {side.upper()} [{order_type_label}] order: "
             f"{tag} | qty: {qty} @ {price}"
+            + (" (margin_order=true)" if use_margin else "")
         )
 
         order = exchange.create_order(
@@ -625,9 +633,9 @@ def place_order(symbol: str, side: str, qty: float, price: float,
 def close_position(position: dict, current_price: float):
     """Close an existing position.
 
-    Uses margin order type when closing a SHORT position (buying back
-    borrowed asset), and spot order type when closing a LONG position
-    (selling owned asset).
+    Uses margin_order=True when closing a SHORT position (buying back
+    borrowed asset via margin), and spot order when closing a LONG
+    position (selling owned asset).
     """
     symbol_tag = position["symbol"]
     # Convert tag back to ccxt symbol
