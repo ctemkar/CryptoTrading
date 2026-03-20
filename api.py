@@ -143,6 +143,25 @@ def api_trades():
         return jsonify({"trades": [], "error": str(e)})
 
 
+@app.route("/api/equity")
+def api_equity():
+    """Fetch equity (balance) history from Supabase for the equity chart."""
+    if engine.supabase is None:
+        return jsonify({"equity": [], "error": "Supabase not connected"})
+    try:
+        resp = (engine.supabase.table("equity")
+                .select("*")
+                .order("created_at", desc=False)
+                .limit(500)
+                .execute())
+        rows = resp.data or []
+        equity = [{"balance": float(r.get("balance", 0)),
+                    "timestamp": r.get("created_at")} for r in rows]
+        return jsonify({"equity": equity})
+    except Exception as e:
+        return jsonify({"equity": [], "error": str(e)})
+
+
 @app.route("/api/engine/start", methods=["POST"])
 def api_engine_start():
     """Trigger an immediate analysis cycle in background."""
