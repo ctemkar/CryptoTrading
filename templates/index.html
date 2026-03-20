@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Crypto Master Dashboard</title>
+  <style>
+    /* ── Reset & Base ─────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0a0a0a;
+      color: #c8c8c8;
+      font-family: 'Courier New', Courier, monospace;
+      padding: 24px 32px;
+      min-height: 100vh;
+    }
+
+    h1 { font-size: 28px; color: #ffffff; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 4px; }
+
+    h2 {
+      font-size: 16px; color: #00ff88; text-transform: uppercase;
+      letter-spacing: 1px; margin-bottom: 12px; font-weight: 700;
+    }
+
+    /* ── Header ──────────────────────────────────────────────── */
+    .header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 24px; }
+    .balance { font-size: 18px; color: #00ff88; font-weight: bold; }
+
+    /* ── Stats Bar ────────────────────────────────────────────── */
+    .stats-bar {
+      display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap;
+    }
+    .stat-card {
+      background: #111; border: 1px solid #222; border-radius: 6px;
+      padding: 14px 20px; flex: 1; min-width: 160px;
+    }
+    .stat-label { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+    .stat-value { font-size: 22px; font-weight: 700; color: #fff; }
+    .stat-value.green { color: #00ff88; }
+    .stat-value.red { color: #ff4444; }
+    .stat-value.yellow { color: #ffaa00; }
+
+    /* ── Sections ─────────────────────────────────────────────── */
+    .section { margin-bottom: 28px; }
+    .muted { color: #666; font-size: 14px; }
+
+    /* ── Active Positions ─────────────────────────────────────── */
+    .positions-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+    .pos-card {
+      background: #111; border-radius: 6px; padding: 16px 18px;
+      border-left: 4px solid #333;
+    }
+    .pos-card.buy { border-left-color: #00ff88; }
+    .pos-card.sell { border-left-color: #ff4444; }
+    .pos-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .pos-symbol { font-size: 16px; font-weight: 700; color: #fff; }
+    .pos-side { font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 3px; }
+    .pos-side.buy { color: #000; background: #00ff88; }
+    .pos-side.sell { color: #fff; background: #ff4444; }
+    .pos-detail { font-size: 12px; color: #888; line-height: 1.8; }
+    .pos-detail span { color: #ccc; }
+    .pos-pnl { font-size: 16px; font-weight: 700; margin-top: 6px; }
+    .pos-pnl.profit { color: #00ff88; }
+    .pos-pnl.loss { color: #ff4444; }
+
+    /* ── Analysis Grid ────────────────────────────────────────── */
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; }
+    .card { background: #111; border: 1px solid #222; border-radius: 6px; padding: 18px 20px; }
+    .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+    .card-symbol { font-size: 15px; font-weight: 700; color: #fff; }
+    .badge { font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 3px; }
+    .badge.BULLISH  { color: #00ff88; }
+    .badge.BEARISH  { color: #ff4444; }
+    .badge.NEUTRAL  { color: #ffaa00; }
+    .card-price { font-size: 22px; font-weight: 700; color: #ffffff; margin-bottom: 4px; }
+    .card-action { font-size: 12px; margin-bottom: 8px; font-weight: 700; }
+    .card-action .action-buy { color: #00ff88; }
+    .card-action .action-sell { color: #ff4444; }
+    .card-action .action-hold { color: #ffaa00; }
+    .card-analysis { font-size: 12px; color: #888; line-height: 1.5; }
+
+    /* ── Trade History Table ──────────────────────────────────── */
+    .trade-table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; color: #00ff88; padding: 8px 10px; border-bottom: 1px solid #222; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+    td { padding: 8px 10px; border-bottom: 1px solid #1a1a1a; }
+    tr:hover td { background: #151515; }
+    .td-buy { color: #00ff88; font-weight: 700; }
+    .td-sell { color: #ff4444; font-weight: 700; }
+    .td-profit { color: #00ff88; }
+    .td-loss { color: #ff4444; }
+
+    /* ── Logs ─────────────────────────────────────────────────── */
+    .logs-box {
+      background: #0d0d0d; border: 1px solid #1a1a1a; border-radius: 6px;
+      padding: 16px; max-height: 320px; overflow-y: auto; font-size: 12px; line-height: 1.65;
+    }
+    .log-line { white-space: pre-wrap; word-break: break-word; }
+    .log-line.error { color: #ff4444; font-weight: bold; }
+    .log-line.success { color: #00ff88; }
+    .log-line.warn { color: #ffaa00; }
+
+    /* ── Buttons ──────────────────────────────────────────────── */
+    .refresh-btn {
+      background: none; border: 1px solid #333; color: #00ff88;
+      padding: 4px 14px; border-radius: 4px; cursor: pointer;
+      font-family: inherit; font-size: 12px; margin-left: 12px;
+    }
+    .refresh-btn:hover { background: #1a1a1a; }
+    .run-btn {
+      background: #00ff88; color: #000; border: none;
+      padding: 6px 18px; border-radius: 4px; cursor: pointer;
+      font-family: inherit; font-size: 12px; font-weight: 700; margin-left: 12px;
+    }
+    .run-btn:hover { background: #00dd77; }
+
+    /* ── Tabs ─────────────────────────────────────────────────── */
+    .tabs { display: flex; gap: 0; margin-bottom: 16px; border-bottom: 1px solid #222; }
+    .tab {
+      padding: 8px 20px; cursor: pointer; font-size: 13px; color: #666;
+      border-bottom: 2px solid transparent; font-family: inherit;
+      background: none; border-top: none; border-left: none; border-right: none;
+    }
+    .tab:hover { color: #aaa; }
+    .tab.active { color: #00ff88; border-bottom-color: #00ff88; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* ── Responsive ───────────────────────────────────────────── */
+    @media (max-width: 768px) {
+      body { padding: 12px 16px; }
+      .header { flex-direction: column; gap: 8px; }
+      .stats-bar { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <div>
+      <h1>Master Engine v2.1 <span style="color:#666;font-size:16px">(Debug Mode)</span></h1>
+      <div style="font-size:12px;color:#555;margin-top:4px">Auto-refreshes every 15s &bull; <span id="last-update">-</span></div>
+    </div>
+    <div style="text-align:right">
+      <div class="balance">Balance: $<span id="balance">0.00</span></div>
+      <button class="run-btn" onclick="triggerCycle()">▶ Run Cycle Now</button>
+    </div>
+  </div>
+
+  <!-- Stats Bar -->
+  <div class="stats-bar">
+    <div class="stat-card">
+      <div class="stat-label">Active Positions</div>
+      <div class="stat-value" id="stat-positions">0</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Total Trades</div>
+      <div class="stat-value" id="stat-trades">0</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Total P&L</div>
+      <div class="stat-value" id="stat-pnl">$0.00</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Win Rate</div>
+      <div class="stat-value" id="stat-winrate">-</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Buys / Sells</div>
+      <div class="stat-value" id="stat-buysells">0 / 0</div>
+    </div>
+  </div>
+
+  <!-- Active Positions -->
+  <div class="section">
+    <h2>Active Positions</h2>
+    <div class="positions-grid" id="positions-container"><span class="muted">Loading...</span></div>
+  </div>
+
+  <!-- Tabs: Analysis | Trade History | Logs -->
+  <div class="tabs">
+    <button class="tab active" data-tab="analysis-tab">Market Analysis</button>
+    <button class="tab" data-tab="trades-tab">Trade History</button>
+    <button class="tab" data-tab="logs-tab">Engine Logs</button>
+  </div>
+
+  <!-- Market Analysis -->
+  <div class="tab-content active" id="analysis-tab">
+    <div class="grid" id="analysis-grid"></div>
+  </div>
+
+  <!-- Trade History -->
+  <div class="tab-content" id="trades-tab">
+    <div class="trade-table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Symbol</th>
+            <th>Side</th>
+            <th>Action</th>
+            <th>Qty</th>
+            <th>Price</th>
+            <th>P&L</th>
+          </tr>
+        </thead>
+        <tbody id="trades-tbody"></tbody>
+      </table>
+      <div id="trades-empty" class="muted" style="padding:12px">Loading trades...</div>
+    </div>
+  </div>
+
+  <!-- Engine Logs -->
+  <div class="tab-content" id="logs-tab">
+    <h2 style="margin-bottom:8px">Engine Logs <span style="color:#666;font-size:12px">(Check here for Gemini API Errors)</span>
+      <button class="refresh-btn" onclick="fetchStatus()">↻ Refresh</button>
+    </h2>
+    <div class="logs-box" id="logs-box"></div>
+  </div>
+
+<script>
+const API_STATUS = "/api/status";
+const API_TRADES = "/api/trades";
+const API_START  = "/api/engine/start";
+const POLL_MS = 15000;
+
+// ── Formatting helpers ──────────────────────────────────────
+function fmt(n, decimals) {
+  if (n === undefined || n === null) return "0";
+  return Number(n).toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+function fmtPrice(n) {
+  if (!n || n === 0) return "$0";
+  if (n < 0.01) return "$" + fmt(n, 6);
+  if (n < 1) return "$" + fmt(n, 5);
+  return "$" + fmt(n, 2);
+}
+function escapeHtml(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+function timeAgo(iso) {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  return d.toLocaleString();
+}
+
+// ── Tabs ────────────────────────────────────────────────────
+document.querySelectorAll(".tab").forEach(tab => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+    document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
+    tab.classList.add("active");
+    document.getElementById(tab.dataset.tab).classList.add("active");
+  });
+});
+
+// ── Render: Stats Bar ───────────────────────────────────────
+function renderStats(positions, trades) {
+  document.getElementById("stat-positions").textContent = positions ? positions.length : 0;
+
+  if (!trades || trades.length === 0) {
+    document.getElementById("stat-trades").textContent = "0";
+    document.getElementById("stat-pnl").textContent = "$0.00";
+    document.getElementById("stat-pnl").className = "stat-value";
+    document.getElementById("stat-winrate").textContent = "-";
+    document.getElementById("stat-buysells").textContent = "0 / 0";
+    return;
+  }
+
+  document.getElementById("stat-trades").textContent = trades.length;
+
+  const closedTrades = trades.filter(t => t.action === "close");
+  const totalPnl = closedTrades.reduce((s, t) => s + (parseFloat(t.pnl) || 0), 0);
+  const pnlEl = document.getElementById("stat-pnl");
+  pnlEl.textContent = (totalPnl >= 0 ? "+$" : "-$") + fmt(Math.abs(totalPnl), 2);
+  pnlEl.className = "stat-value " + (totalPnl >= 0 ? "green" : "red");
+
+  const wins = closedTrades.filter(t => parseFloat(t.pnl) > 0).length;
+  const total = closedTrades.length;
+  const wr = total > 0 ? ((wins / total) * 100).toFixed(0) + "%" : "-";
+  document.getElementById("stat-winrate").textContent = wr;
+
+  const buys = trades.filter(t => t.side === "buy").length;
+  const sells = trades.filter(t => t.side === "sell").length;
+  document.getElementById("stat-buysells").textContent = buys + " / " + sells;
+}
+
+// ── Render: Active Positions ────────────────────────────────
+function renderPositions(positions, analysis) {
+  const el = document.getElementById("positions-container");
+  if (!positions || positions.length === 0) {
+    el.innerHTML = '<span class="muted">No active positions.</span>';
+    return;
+  }
+  let html = "";
+  positions.forEach(p => {
+    const side = p.side || "buy";
+    const currentPrice = analysis && analysis[p.symbol] ? analysis[p.symbol].price : 0;
+    let unrealizedPnl = 0;
+    if (currentPrice > 0 && p.entry_price) {
+      if (side === "buy") unrealizedPnl = (currentPrice - p.entry_price) * p.qty;
+      else unrealizedPnl = (p.entry_price - currentPrice) * p.qty;
+    }
+    const pnlClass = unrealizedPnl >= 0 ? "profit" : "loss";
+    const pnlSign = unrealizedPnl >= 0 ? "+" : "";
+
+    html += `
+      <div class="pos-card ${side}">
+        <div class="pos-header">
+          <span class="pos-symbol">${p.symbol}</span>
+          <span class="pos-side ${side}">${side.toUpperCase()}</span>
+        </div>
+        <div class="pos-detail">
+          Entry: <span>${fmtPrice(p.entry_price)}</span> &bull;
+          Qty: <span>${p.qty}</span> &bull;
+          Current: <span>${currentPrice > 0 ? fmtPrice(currentPrice) : '-'}</span>
+        </div>
+        <div class="pos-pnl ${pnlClass}">
+          ${currentPrice > 0 ? pnlSign + '$' + fmt(Math.abs(unrealizedPnl), 2) + ' unrealized' : 'Fetching price...'}
+        </div>
+        <div style="font-size:11px;color:#555;margin-top:4px">Opened: ${timeAgo(p.opened_at)}</div>
+      </div>`;
+  });
+  el.innerHTML = html;
+}
+
+// ── Render: Analysis Cards ──────────────────────────────────
+function renderAnalysis(analysis) {
+  const grid = document.getElementById("analysis-grid");
+  if (!analysis || Object.keys(analysis).length === 0) {
+    grid.innerHTML = '<span class="muted">Waiting for first analysis cycle...</span>';
+    return;
+  }
+
+  const order = ["BTCUSD", "ETHUSD", "SOLUSD", "LTCUSD", "XRPUSD", "DOGEUSD"];
+  let html = "";
+
+  order.forEach(tag => {
+    const a = analysis[tag];
+    if (!a) return;
+
+    // Determine action text
+    let actionHtml = "";
+    if (a.sentiment === "BULLISH" && a.confidence >= 65) {
+      actionHtml = '<span class="action-buy">→ BUY SIGNAL</span>';
+    } else if (a.sentiment === "BEARISH" && a.confidence >= 65) {
+      actionHtml = '<span class="action-sell">→ SHORT SIGNAL</span>';
+    } else {
+      actionHtml = '<span class="action-hold">→ HOLD</span>';
+    }
+
+    html += `
+      <div class="card">
+        <div class="card-header">
+          <span class="card-symbol">${a.symbol}</span>
+          <span class="badge ${a.sentiment}">${a.sentiment} (${a.confidence}%)</span>
+        </div>
+        <div class="card-price">${fmtPrice(a.price)}</div>
+        <div class="card-action">${actionHtml}</div>
+        <div style="font-size:11px;color:#555;margin-bottom:6px">SMA20: ${fmtPrice(a.sma20)} &bull; SMA50: ${fmtPrice(a.sma50)}</div>
+        <div class="card-analysis">"${a.analysis}"</div>
+      </div>`;
+  });
+
+  grid.innerHTML = html;
+}
+
+// ── Render: Trade History ───────────────────────────────────
+function renderTrades(trades) {
+  const tbody = document.getElementById("trades-tbody");
+  const empty = document.getElementById("trades-empty");
+
+  if (!trades || trades.length === 0) {
+    tbody.innerHTML = "";
+    empty.textContent = "No trades recorded yet.";
+    empty.style.display = "block";
+    return;
+  }
+
+  empty.style.display = "none";
+  let html = "";
+  trades.forEach(t => {
+    const sideClass = t.side === "buy" ? "td-buy" : "td-sell";
+    const pnl = parseFloat(t.pnl) || 0;
+    const pnlClass = pnl > 0 ? "td-profit" : pnl < 0 ? "td-loss" : "";
+    const pnlText = t.action === "close" ? (pnl >= 0 ? "+$" : "-$") + fmt(Math.abs(pnl), 2) : "-";
+    const actionLabel = t.action === "open" ? "OPEN" : "CLOSE";
+    const actionStyle = t.action === "close" ? "color:#ffaa00" : "color:#888";
+
+    html += `<tr>
+      <td>${timeAgo(t.executed_at)}</td>
+      <td style="color:#fff;font-weight:700">${t.symbol}</td>
+      <td class="${sideClass}">${(t.side || '').toUpperCase()}</td>
+      <td style="${actionStyle};font-weight:700">${actionLabel}</td>
+      <td>${t.qty}</td>
+      <td>${fmtPrice(t.price)}</td>
+      <td class="${pnlClass}">${pnlText}</td>
+    </tr>`;
+  });
+  tbody.innerHTML = html;
+}
+
+// ── Render: Logs ────────────────────────────────────────────
+function renderLogs(logs) {
+  const box = document.getElementById("logs-box");
+  if (!logs || logs.length === 0) {
+    box.innerHTML = '<span class="muted">No logs yet.</span>';
+    return;
+  }
+  let html = "";
+  logs.slice(-100).forEach(line => {
+    let cls = "log-line";
+    if (line.includes("ERROR") || line.includes("❌")) cls += " error";
+    else if (line.includes("✅") || line.includes("CLOSED") || line.includes("Order placed")) cls += " success";
+    else if (line.includes("⚠️") || line.includes("FLIP") || line.includes("⏳") || line.includes("🔄")) cls += " warn";
+    html += `<div class="${cls}">${escapeHtml(line)}</div>`;
+  });
+  box.innerHTML = html;
+  box.scrollTop = box.scrollHeight;
+}
+
+// ── Data fetching ───────────────────────────────────────────
+let cachedTrades = [];
+
+async function fetchTrades() {
+  try {
+    const resp = await fetch(API_TRADES);
+    const data = await resp.json();
+    cachedTrades = data.trades || [];
+  } catch (e) { console.error("Trade fetch error:", e); }
+}
+
+async function fetchStatus() {
+  try {
+    const resp = await fetch(API_STATUS);
+    const data = await resp.json();
+    document.getElementById("balance").textContent = fmt(data.balance, 2);
+    document.getElementById("last-update").textContent = new Date().toLocaleTimeString();
+
+    renderPositions(data.positions, data.analysis);
+    renderAnalysis(data.analysis);
+    renderLogs(data.logs);
+
+    // Fetch trades separately
+    await fetchTrades();
+    renderStats(data.positions, cachedTrades);
+    renderTrades(cachedTrades);
+  } catch (e) {
+    console.error("Fetch error:", e);
+  }
+}
+
+async function triggerCycle() {
+  try {
+    const btn = document.querySelector(".run-btn");
+    btn.textContent = "⏳ Running...";
+    btn.disabled = true;
+    await fetch(API_START, { method: "POST" });
+    setTimeout(() => {
+      btn.textContent = "▶ Run Cycle Now";
+      btn.disabled = false;
+      fetchStatus();
+    }, 5000);
+  } catch (e) { console.error("Trigger error:", e); }
+}
+
+// Initial fetch + poll
+fetchStatus();
+setInterval(fetchStatus, POLL_MS);
+</script>
+</body>
+</html>
