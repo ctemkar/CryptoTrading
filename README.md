@@ -25,8 +25,8 @@ static/            – Static assets
 
 1. Clone and install:
    ```bash
-   git clone https://github.com/ctemkar/crypto-master-engine.git
-   cd crypto-master-engine
+   git clone https://github.com/ctemkar/CryptoTrading.git
+   cd CryptoTrading
    pip install -r requirements.txt
    ```
 

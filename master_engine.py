@@ -15,7 +15,6 @@ Supported pairs: BTCUSD, ETHUSD, SOLUSD, LTCUSD, XRPUSD, DOGEUSD
 import os
 import sys
 import time
-import json
 import logging
 import traceback
 from datetime import datetime, timezone
@@ -348,35 +347,58 @@ def _evaluate_sma(tag: str, price: float, sma20: float, sma50: float):
 # Trade execution with margin pre-checks
 # ---------------------------------------------------------------------------
 
-def check_margin_available(symbol: str, side: str, qty: float, price: float) -> bool:
+def check_margin_available(symbol: str, side: str, qty: float, price: float) -> tuple:
     """
     Pre-check if we have enough margin/balance to execute the trade.
     Prevents 'insufficient funds' errors from Gemini.
+
+    Returns: (ok: bool, available_balance: float)
     """
     try:
         init_exchange()
         balance = _exchange_balance()
         required = qty * price
 
-        # For sells/shorts on margin, Gemini requires collateral
-        # Use a conservative 50% margin requirement estimate
-        margin_required = required * 0.5 if side == "sell" else required
+        # Gemini margin requirements:
+        # - Buys require the full notional value in USD
+        # - Sells/shorts require collateral (conservatively ~60% to account for
+        #   Gemini's dynamic margin requirements + buffer for fees)
+        if side == "sell":
+            margin_required = required * 0.60
+        else:
+            margin_required = required
 
-        if balance < margin_required + MIN_BALANCE_RESERVE:
-            logger.error(
-                f"❌ [MARGIN CHECK] {symbol}: Need ${margin_required:.2f} + "
-                f"${MIN_BALANCE_RESERVE:.2f} reserve, have ${balance:.2f}"
+        total_needed = margin_required + MIN_BALANCE_RESERVE
+
+        if balance < total_needed:
+            logger.warning(
+                f"⚠️  [MARGIN CHECK] {SYMBOL_MAP.get(symbol, symbol)}: "
+                f"Need ${margin_required:.2f} margin + ${MIN_BALANCE_RESERVE:.2f} reserve "
+                f"= ${total_needed:.2f}, but only ${balance:.2f} available"
             )
-            return False
+            return False, balance
 
         logger.info(
-            f"✅ [MARGIN CHECK] {symbol}: ${margin_required:.2f} required, "
-            f"${balance:.2f} available"
+            f"✅ [MARGIN CHECK] {SYMBOL_MAP.get(symbol, symbol)}: "
+            f"${margin_required:.2f} required, ${balance:.2f} available"
         )
-        return True
+        return True, balance
     except Exception as e:
         logger.error(f"❌ [MARGIN CHECK] Error: {e}")
-        return False
+        return False, 0.0
+
+
+def calculate_safe_trade_size(balance: float) -> float:
+    """
+    Dynamically scale trade size based on available balance.
+    Prevents over-leveraging when balance is low.
+    """
+    usable = balance - MIN_BALANCE_RESERVE
+    if usable <= 0:
+        return 0.0
+    # Never risk more than 25% of usable balance per trade, capped at TRADE_SIZE_USD
+    max_trade = min(usable * 0.25, TRADE_SIZE_USD)
+    return max(max_trade, 5.0) if max_trade >= 5.0 else 0.0  # Gemini min ~$5
 
 
 def get_min_order_size(symbol: str) -> float:
@@ -407,9 +429,10 @@ def calculate_order_qty(symbol: str, price: float, usd_amount: float) -> float:
     return qty
 
 
-def place_order(symbol: str, side: str, qty: float, price: float) -> dict:
+def place_order(symbol: str, side: str, qty: float, price: float, retry: int = 1) -> dict:
     """
     Place a limit order on Gemini with comprehensive error handling.
+    Includes margin pre-check and optional retry with reduced size.
     Returns order dict or None on failure.
     """
     tag = SYMBOL_MAP[symbol]
@@ -417,11 +440,13 @@ def place_order(symbol: str, side: str, qty: float, price: float) -> dict:
         init_exchange()
 
         # Pre-flight margin check
-        if not check_margin_available(symbol, side, qty, price):
+        ok, avail_balance = check_margin_available(symbol, side, qty, price)
+        if not ok:
             logger.error(
                 f"❌ [EXECUTION ERROR] {tag}: Failed to place {side} order on "
                 f"symbol '{tag}' for price ${price:,.2f} and quantity {qty} "
-                f"{symbol.split('/')[0]} due to insufficient funds"
+                f"{symbol.split('/')[0]} due to insufficient funds "
+                f"(balance: ${avail_balance:.2f})"
             )
             return None
 
@@ -441,19 +466,33 @@ def place_order(symbol: str, side: str, qty: float, price: float) -> dict:
 
     except ccxt.InsufficientFunds as e:
         logger.error(
-            f"❌ [EXECUTION ERROR] {tag}: gemini Failed to place {side} order on "
-            f"symbol '{tag}' for price ${price:,.2f} and quantity {qty} "
-            f"{symbol.split('/')[0]} due to insufficient funds"
+            f"❌ [EXECUTION ERROR] {tag}: Gemini rejected {side} order – "
+            f"insufficient funds (qty={qty}, price=${price:,.2f})"
         )
+        # Retry with a smaller quantity if we haven't already
+        if retry > 0:
+            reduced_qty = calculate_order_qty(symbol, price, calculate_safe_trade_size(_exchange_balance()))
+            if reduced_qty > 0 and reduced_qty < qty:
+                logger.info(f"🔄 [RETRY] Attempting reduced order: {reduced_qty} (was {qty})")
+                return place_order(symbol, side, reduced_qty, price, retry=retry - 1)
         return None
     except ccxt.InvalidOrder as e:
         logger.error(f"❌ [EXECUTION ERROR] {tag}: Invalid order – {e}")
         return None
     except ccxt.NetworkError as e:
-        logger.error(f"❌ [NETWORK ERROR] {tag}: {e}")
+        logger.error(f"❌ [NETWORK ERROR] {tag}: Network issue – {e}")
+        # Retry once on network errors
+        if retry > 0:
+            logger.info(f"🔄 [RETRY] Retrying after network error...")
+            time.sleep(2)
+            return place_order(symbol, side, qty, price, retry=retry - 1)
+        return None
+    except ccxt.ExchangeError as e:
+        logger.error(f"❌ [EXCHANGE ERROR] {tag}: {e}")
         return None
     except Exception as e:
-        logger.error(f"❌ [EXECUTION ERROR] {tag}: {e}")
+        logger.error(f"❌ [EXECUTION ERROR] {tag}: Unexpected error – {e}")
+        logger.error(traceback.format_exc())
         return None
 
 
@@ -495,15 +534,28 @@ def close_position(position: dict, current_price: float):
 
 
 def open_new_position(symbol: str, side: str, price: float):
-    """Open a new position with margin checks."""
+    """Open a new position with dynamic sizing and margin checks."""
     tag = SYMBOL_MAP[symbol]
-    qty = calculate_order_qty(symbol, price, TRADE_SIZE_USD)
 
-    if qty <= 0:
-        logger.warning(f"⚠️  {tag}: Order qty too small, skipping")
+    # Dynamically size the trade based on available balance
+    balance = _exchange_balance()
+    trade_usd = calculate_safe_trade_size(balance)
+    if trade_usd <= 0:
+        logger.warning(
+            f"⚠️  {tag}: Insufficient balance (${balance:.2f}) to open any position. "
+            f"Need at least ${MIN_BALANCE_RESERVE + 5:.2f}"
+        )
         return
 
-    logger.info(f"🚀 OPENING {side.upper()} on {tag} | qty: {qty} @ {price}")
+    qty = calculate_order_qty(symbol, price, trade_usd)
+    if qty <= 0:
+        logger.warning(f"⚠️  {tag}: Order qty too small for ${trade_usd:.2f} trade, skipping")
+        return
+
+    logger.info(
+        f"🚀 OPENING {side.upper()} on {tag} | qty: {qty} @ {price} "
+        f"(trade size: ${trade_usd:.2f})"
+    )
 
     order = place_order(symbol, side, qty, price)
     if order:
